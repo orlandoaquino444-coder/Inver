@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EUR/USD Analizador</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--tx:#e6edf3;--mut:#8b949e;--up:#3fb950;--dn:#f85149;--ac:#58a6ff;--warn:#d29922}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:1200px;margin:0 auto;padding:16px}
+header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:12px}
+h1{margin:0;font-size:20px}
+.price{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums}
+.chg{font-size:15px;margin-left:8px}
+.up{color:var(--up)}.dn{color:var(--dn)}.mut{color:var(--mut)}.warn{color:var(--warn)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+.controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:12px}
+label{display:block;font-size:12px;color:var(--mut);margin-bottom:3px}
+input,select,button{width:100%;background:#0d1117;color:var(--tx);border:1px solid var(--line);border-radius:6px;padding:8px;font-size:14px}
+button{cursor:pointer;background:var(--ac);color:#04121f;font-weight:600;border:0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin-bottom:12px}
+.badge{display:inline-block;padding:6px 16px;border-radius:8px;font-size:22px;font-weight:800;letter-spacing:.5px}
+.b-buy{background:rgba(63,185,80,.18);color:var(--up)}
+.b-sell{background:rgba(248,81,73,.18);color:var(--dn)}
+.b-wait{background:rgba(210,153,34,.18);color:var(--warn)}
+table{width:100%;border-collapse:collapse}
+td{padding:4px 0;border-bottom:1px solid var(--line);vertical-align:top}
+td:last-child{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+h2{margin:0 0 8px;font-size:15px}
+.chartbox{height:380px;position:relative}
+.days{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+.day{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px}
+.day .h{display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px}
+.day canvas{height:110px!important}
+.bar{height:8px;background:#0d1117;border-radius:4px;overflow:hidden;margin-top:6px}
+.bar>i{display:block;height:100%}
+.note{font-size:12px;color:var(--mut);margin-top:10px}
+#status{font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div>
+    <h1>EUR/USD · Analizador en tiempo real</h1>
+    <div><span class="price" id="price">—</span><span class="chg" id="chg"></span></div>
+    <div class="mut" id="status">Cargando datos…</div>
+  </div>
+</header>
+
+<div class="card controls">
+  <div><label>Capital a invertir (USD)</label><input id="capital" type="number" min="10" step="10" value="1000"></div>
+  <div><label>Riesgo por operación (%)</label><input id="risk" type="number" min="0.1" max="10" step="0.1" value="1"></div>
+  <div><label>Apalancamiento (1:x)</label><input id="lev" type="number" min="1" max="500" step="1" value="30"></div>
+  <div><label>Temporalidad</label>
+    <select id="tf"><option value="5m">5 minutos</option><option value="15m" selected>15 minutos</option><option value="1h">1 hora</option><option value="1d">Diario</option></select></div>
+  <div><label>Horizonte (barras)</label><input id="hz" type="number" min="3" max="120" value="32"></div>
+  <div><label>Stop-loss (× ATR)</label><input id="ksl" type="number" min="0.5" max="6" step="0.1" value="1.5"></div>
+  <div><label>Take-profit (× ATR)</label><input id="ktp" type="number" min="0.5" max="10" step="0.1" value="2.5"></div>
+  <div><label>&nbsp;</label><button id="go">Analizar ahora</button></div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>Señal</h2>
+    <div id="verdict"></div>
+    <div class="bar"><i id="scorebar"></i></div>
+    <table id="tblSignal" style="margin-top:8px"></table>
+  </div>
+  <div class="card">
+    <h2>Plan operativo con tu capital</h2>
+    <table id="tblPlan"></table>
+  </div>
+  <div class="card">
+    <h2>Cuándo y en cuánto tiempo</h2>
+    <table id="tblTime"></table>
+  </div>
+  <div class="card">
+    <h2>Indicadores y modelo</h2>
+    <table id="tblInd"></table>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:12px">
+  <h2>Gráfico principal + proyección Monte Carlo (mediana y banda 10–90%)</h2>
+  <div class="chartbox"><canvas id="main"></canvas></div>
+</div>
+
+<div class="card">
+  <h2 id="daysTitle">Gráficos por día</h2>
+  <div class="days" id="days"></div>
+</div>
+
+<p class="note">
+Aviso: esto es una herramienta educativa, no asesoramiento financiero. El mercado de divisas es muy cercano a un paseo aleatorio; ningún método estadístico garantiza resultados y se puede perder todo el capital. Los modelos (EWMA/GARCH-lite, regresión, AR(1), Monte Carlo con bootstrap) estiman probabilidades, no certezas. Prueba siempre en cuenta demo antes de usar dinero real.
+</p>
+</div>
+
+<script>
+/* ============ CONFIG ============ */
+// Opcional: proxy propio (ej. un servicio en Render). Usa {url} como marcador. También se puede pasar ?proxy=...
+const CUSTOM_PROXY = new URLSearchParams(location.search).get('proxy') || '';
+const TF = {
+  '5m':{range:'5d',min:5,H:36,vis:300},
+  '15m':{range:'1mo',min:15,H:32,vis:300},
+  '1h':{range:'3mo',min:60,H:24,vis:300},
+  '1d':{range:'1y',min:1440,H:5,vis:120}
+};
+const $ = id => document.getElementById(id);
+let charts = {main:null, days:[]};
+let timer = null;
+
+/* ============ DATOS ============ */
+async function getJSON(url){
+  const tries = [];
+  if(CUSTOM_PROXY) tries.push(CUSTOM_PROXY.replace('{url}', encodeURIComponent(url)));
+  tries.push(url,
+    'https://corsproxy.io/?url=' + encodeURIComponent(url),
+    'https://api.allorigins.win/raw?url=' + encodeURIComponent(url));
+  let last;
+  for(const u of tries){
+    try{
+      const ctl = new AbortController(); const to = setTimeout(()=>ctl.abort(), 9000);
+      const r = await fetch(u,{signal:ctl.signal,cache:'no-store'}); clearTimeout(to);
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      return await r.json();
+    }catch(e){ last = e; }
+  }
+  throw last;
+}
+
+async function loadBars(tf){
+  const cfg = TF[tf];
+  try{
+    const interval = tf;
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/EURUSD=X?interval=${interval}&range=${cfg.range}`;
+    const j = await getJSON(url);
+    const res = j.chart.result[0];
+    const ts = res.timestamp, q = res.indicators.quote[0];
+    const bars = [];
+    for(let i=0;i<ts.length;i++){
+      if(q.close[i]==null||q.open[i]==null) continue;
+      bars.push({t:ts[i]*1000,o:q.open[i],h:q.high[i]??q.close[i],l:q.low[i]??q.close[i],c:q.close[i]});
+    }
+    if(bars.length<80) throw new Error('pocos datos');
+    return {bars, source:'Yahoo Finance (EURUSD=X)', live:true};
+  }catch(e){
+    // Respaldo: BCE vía Frankfurter (solo cierres diarios)
+    const d = new Date(Date.now()-400*86400000).toISOString().slice(0,10);
+    const j = await getJSON(`https://api.frankfurter.dev/v1/${d}..?base=EUR&symbols=USD`);
+    const days = Object.keys(j.rates).sort();
+    const bars = days.map((k,i)=>{
+      const c = j.rates[k].USD, p = i? j.rates[days[i-1]].USD : c;
+      return {t:Date.parse(k+'T12:00:00Z'),o:p,h:Math.max(c,p),l:Math.min(c,p),c};
+    });
+    return {bars, source:'BCE / Frankfurter (solo diario, no es tiempo real)', live:false, forceDaily:true};
+  }
+}
+
+/* ============ INDICADORES ============ */
+const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+function ema(a,n){const k=2/(n+1),o=[a[0]];for(let i=1;i<a.length;i++)o.push(a[i]*k+o[i-1]*(1-k));return o;}
+function rsiArr(c,n=14){
+  const o=new Array(c.length).fill(50); if(c.length<=n) return o;
+  let g=0,l=0; for(let i=1;i<=n;i++){const d=c[i]-c[i-1]; d>=0?g+=d:l-=d;} g/=n; l/=n;
+  o[n]=l===0?100:100-100/(1+g/l);
+  for(let i=n+1;i<c.length;i++){const d=c[i]-c[i-1]; g=(g*(n-1)+Math.max(d,0))/n; l=(l*(n-1)+Math.max(-d,0))/n; o[i]=l===0?100:100-100/(1+g/l);}
+  return o;
+}
+function atrArr(b,n=14){
+  const tr=b.map((x,i)=>i===0?x.h-x.l:Math.max(x.h-x.l,Math.abs(x.h-b[i-1].c),Math.abs(x.l-b[i-1].c)));
+  let a=tr.slice(0,n).reduce((s,v)=>s+v,0)/Math.min(n,tr.length); const o=[];
+  for(let i=0;i<tr.length;i++){ if(i>=n) a=(a*(n-1)+tr[i])/n; o.push(a); }
+  return o;
+}
+function bollinger(c,n=20,k=2){
+  const mid=[],up=[],lo=[],pb=[];
+  for(let i=0;i<c.length;i++){
+    const s=c.slice(Math.max(0,i-n+1),i+1), m=s.reduce((a,v)=>a+v,0)/s.length;
+    const sd=Math.sqrt(s.reduce((a,v)=>a+(v-m)**2,0)/s.length)||1e-9;
+    mid.push(m); up.push(m+k*sd); lo.push(m-k*sd); pb.push((c[i]-(m-k*sd))/(2*k*sd));
+  }
+  return {mid,up,lo,pb};
+}
+function regression(y){ // mínimos cuadrados sobre ln(precio): pendiente y estadístico t
+  const n=y.length, xm=(n-1)/2, ym=y.reduce((a,v)=>a+v,0)/n;
+  let sxy=0,sxx=0; for(let i=0;i<n;i++){sxy+=(i-xm)*(y[i]-ym); sxx+=(i-xm)**2;}
+  const b=sxy/sxx, a=ym-b*xm; let sse=0; for(let i=0;i<n;i++) sse+=(y[i]-(a+b*i))**2;
+  const se=Math.sqrt(sse/Math.max(n-2,1)/sxx)||1e-12;
+  return {b,t:b/se};
+}
+const pct=(arr,p)=>{const s=[...arr].sort((a,b)=>a-b); return s[Math.min(s.length-1,Math.max(0,Math.floor(p*(s.length-1))))];};
+
+/* ============ MODELO ============ */
+function scoreTech(i,I){ // puntuación técnica en la barra i (-1..1)
+  const trend=((I.e9[i]>I.e21[i])?.5:-.5)+((I.e21[i]>I.e50[i])?.5:-.5);
+  const rsi=clamp((50-I.rsi[i])/25,-1,1);
+  const hist=I.hist[i], dh=hist-(I.hist[i-1]||0);
+  const macd=Math.sign(hist)*.5+Math.sign(dh)*.5;
+  const bb=clamp((.5-I.bb.pb[i])*2,-1,1);
+  return {trend,rsi,macd,bb};
+}
+const W={trend:.2,rsi:.1,macd:.15,bb:.1,reg:.15,mc:.3};
+
+function analyze(bars,p){
+  const n=bars.length, c=bars.map(b=>b.c);
+  const e9=ema(c,9),e21=ema(c,21),e50=ema(c,50);
+  const rsi=rsiArr(c), atr=atrArr(bars), bb=bollinger(c);
+  const m12=ema(c,12), m26=ema(c,26), macdL=m12.map((v,i)=>v-m26[i]), sig=ema(macdL,9), hist=macdL.map((v,i)=>v-sig[i]);
+  const I={e9,e21,e50,rsi,atr,bb,hist};
+  const last=c[n-1], A=atr[n-1];
+
+  // retornos logarítmicos y volatilidad EWMA (λ=0.94, estilo RiskMetrics / GARCH-lite)
+  const r=[0]; for(let i=1;i<n;i++) r.push(Math.log(c[i]/c[i-1]));
+  const lam=.94; let v=r.slice(1,21).reduce((s,x)=>s+x*x,0)/20; const z=[];
+  for(let i=1;i<n;i++){ z.push(r[i]/Math.sqrt(v)); v=lam*v+(1-lam)*r[i]*r[i]; }
+  const sigma=Math.sqrt(v); // volatilidad prevista por barra
+  const zs=z.slice(-1500).filter(isFinite);
+
+  // deriva: regresión sobre últimas 60 barras (reducida) + AR(1) de los retornos
+  const L=Math.min(60,n), reg=regression(c.slice(-L).map(Math.log));
+  let mu=reg.b*clamp(Math.abs(reg.t)/6,0,.5); mu=clamp(mu,-.15*sigma,.15*sigma);
+  const rr=r.slice(-201,-1), rr1=r.slice(-200);
+  const mr=rr.reduce((s,x)=>s+x,0)/rr.length, mr1=rr1.reduce((s,x)=>s+x,0)/rr1.length;
+  let nu=0,de=0; for(let i=0;i<rr.length;i++){nu+=(rr[i]-mr)*(rr1[i]-mr1); de+=(rr[i]-mr)**2;}
+  const phi=clamp(nu/(de||1),-.2,.2);
+
+  // Monte Carlo: bootstrap de residuos estandarizados, volatilidad que se actualiza (EWMA) y AR(1)
+  const H=p.H, Hm=Math.min(H*3,300), N=2500, paths=[];
+  for(let s=0;s<N;s++){
+    let price=last, prev=r[n-1], vv=sigma*sigma; const arr=new Float64Array(Hm);
+    for(let k=0;k<Hm;k++){
+      const sd=Math.sqrt(vv), zz=zs[(Math.random()*zs.length)|0];
+      const ret=mu+phi*(prev-mu)+sd*zz;
+      price*=Math.exp(ret); arr[k]=price; prev=ret; vv=lam*vv+(1-lam)*ret*ret;
+    }
+    paths.push(arr);
+  }
+  const band={p10:[],p50:[],p90:[]};
+  for(let k=0;k<H;k++){const col=paths.map(a=>a[k]); band.p10.push(pct(col,.1)); band.p50.push(pct(col,.5)); band.p90.push(pct(col,.9));}
+  const pUp=paths.filter(a=>a[H-1]>last).length/N;
+  const expEnd=band.p50[H-1];
+
+  // puntuación combinada
+  const t=scoreTech(n-1,I);
+  const comp={...t,reg:clamp(reg.t/3,-1,1),mc:clamp((pUp-.5)/.15,-1,1)};
+  const score=Object.keys(W).reduce((s,k)=>s+W[k]*comp[k],0);
+  const thr=.2;
+  const action=score>thr?'COMPRAR':score<-thr?'VENDER':'ESPERAR';
+  const dir=score>=0?1:-1;
+
+  // backtest ligero de la parte técnica (¿acertó la dirección a H barras?)
+  let tot=0,ok=0; const wt=W.trend+W.rsi+W.macd+W.bb;
+  for(let i=60;i<n-H;i++){
+    const q=scoreTech(i,I), sc=(W.trend*q.trend+W.rsi*q.rsi+W.macd*q.macd+W.bb*q.bb)/wt;
+    if(Math.abs(sc)>.35){tot++; if(Math.sign(c[i+H]-c[i])===Math.sign(sc)) ok++;}
+  }
+
+  // niveles de operación
+  const kSL=p.kSL,kTP=p.kTP;
+  const entry=last, sl=entry-dir*kSL*A, tp=entry+dir*kTP*A;
+  const outcome=hitTPSL(paths,Hm,dir,tp,sl);
+  const buyZone=Math.min(last-.5*A,bb.lo[n-1]), sellZone=Math.max(last+.5*A,bb.up[n-1]);
+  const zBuy=touch(paths,Hm,buyZone,false), zSell=touch(paths,Hm,sellZone,true);
+
+  // tamaño de posición
+  const riskUSD=p.capital*p.risk/100, stopDist=Math.abs(entry-sl);
+  let units=riskUSD/stopDist; const maxUnits=p.capital*p.lev/entry;
+  const capped=units>maxUnits; units=Math.min(units,maxUnits);
+  const notional=units*entry, margin=notional/p.lev;
+  const gain=units*Math.abs(tp-entry), loss=units*stopDist;
+  const ev=outcome.pTP*gain-outcome.pSL*loss;
+
+  return {n,last,A,sigma,mu,phi,reg,rsi:rsi[n-1],hist:hist[n-1],macd:macdL[n-1],e9:e9[n-1],e21:e21[n-1],e50:e50[n-1],bb,I,
+    band,pUp,expEnd,score,comp,action,dir,thr,tot,ok,entry,sl,tp,outcome,buyZone,sellZone,zBuy,zSell,
+    riskUSD,units,capped,notional,margin,gain,loss,ev,H,Hm,e21arr:e21};
+}
+function hitTPSL(paths,Hm,dir,tp,sl){
+  let nTP=0,nSL=0; const tT=[],tS=[];
+  for(const a of paths){
+    for(let k=0;k<Hm;k++){
+      const v=a[k];
+      if(dir>0){ if(v>=tp){nTP++;tT.push(k+1);break;} if(v<=sl){nSL++;tS.push(k+1);break;} }
+      else { if(v<=tp){nTP++;tT.push(k+1);break;} if(v>=sl){nSL++;tS.push(k+1);break;} }
+    }
+  }
+  const N=paths.length;
+  return {pTP:nTP/N,pSL:nSL/N,pNone:1-(nTP+nSL)/N,tTP:tT.length?pct(tT,.5):null,tSL:tS.length?pct(tS,.5):null};
+}
+function touch(paths,Hm,level,above){
+  const ts=[]; for(const a of paths){for(let k=0;k<Hm;k++){ if(above?a[k]>=level:a[k]<=level){ts.push(k+1);break;} }}
+  return {p:ts.length/paths.length,t:ts.length?pct(ts,.5):null,level};
+}
+
+/* ============ FORMATO ============ */
+const f5=x=>x.toFixed(5), f2=x=>x.toLocaleString('es',{minimumFractionDigits:2,maximumFractionDigits:2});
+function fmtTime(bars,min){
+  if(bars==null) return 'No alcanzable en el horizonte';
+  let m=bars*min;
+  if(min>=1440){const d=Math.round(m/1440); return `≈ ${d} día${d>1?'s':''} hábil${d>1?'es':''}`;}
+  if(m<60) return `≈ ${Math.round(m)} min`;
+  if(m<1440){const h=Math.floor(m/60),mm=Math.round(m%60); return `≈ ${h} h ${mm} min`;}
+  const d=Math.floor(m/1440),h=Math.round((m%1440)/60); return `≈ ${d} d ${h} h`;
+}
+const row=(a,b,cls='')=>`<tr><td>${a}</td><td class="${cls}">${b}</td></tr>`;
+const dayLabel=t=>new Date(t).toLocaleDateString('es',{weekday:'short',day:'2-digit',month:'2-digit'});
+const lbl=(t,tf)=>{const d=new Date(t); const dd=d.toLocaleDateString('es',{day:'2-digit',month:'2-digit'}); return tf==='1d'?dd:dd+' '+d.toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'});};
+
+/* ============ RENDER ============ */
+function render(res,tf,meta){
+  const min=TF[tf].min, bars=res.bars, a=res.a;
+  const first=bars.find(b=>new Date(b.t).toDateString()===new Date(bars[bars.length-1].t).toDateString())||bars[0];
+  const ch=a.last-first.o, chp=ch/first.o*100;
+  $('price').textContent=f5(a.last);
+  $('chg').textContent=`${ch>=0?'+':''}${f5(ch)} (${chp>=0?'+':''}${chp.toFixed(2)}%) hoy`;
+  $('chg').className='chg '+(ch>=0?'up':'dn');
+  $('status').innerHTML=`Fuente: ${meta.source} · actualizado ${new Date().toLocaleTimeString('es')} ${meta.live?'':'<span class="warn">· ⚠ sin tiempo real: usa un proxy o recarga</span>'}`;
+
+  const cls=a.action==='COMPRAR'?'b-buy':a.action==='VENDER'?'b-sell':'b-wait';
+  const conf=Math.round(clamp(Math.abs(a.score)/.6,0,1)*100);
+  $('verdict').innerHTML=`<span class="badge ${cls}">${a.action}</span> <span class="mut">fuerza ${conf}%</span>`;
+  $('scorebar').style.cssText=`width:${(a.score+1)/2*100}%;background:${a.score>=0?'var(--up)':'var(--dn)'}`;
+  $('tblSignal').innerHTML=
+    row('Puntuación combinada (−1 a +1)',a.score.toFixed(2),a.score>=0?'up':'dn')+
+    row(`Prob. de subida en ${a.H} barras`,(a.pUp*100).toFixed(1)+'%',a.pUp>=.5?'up':'dn')+
+    row('Precio esperado (mediana)',f5(a.expEnd))+
+    row('Rango 10–90 %',`${f5(a.band.p10[a.H-1])} – ${f5(a.band.p90[a.H-1])}`)+
+    row('Acierto técnico histórico (señales fuertes)',a.tot?`${(a.ok/a.tot*100).toFixed(0)}% de ${a.tot}`:'n/d');
+
+  const dirTxt=a.dir>0?'Compra (largo)':'Venta (corto)';
+  $('tblPlan').innerHTML=
+    row('Capital',`$${f2(+$('capital').value)}`)+
+    row('Dirección sugerida',dirTxt,a.dir>0?'up':'dn')+
+    row('Entrada',f5(a.entry))+
+    row('Stop-loss',f5(a.sl),'dn')+
+    row('Take-profit',f5(a.tp),'up')+
+    row('Tamaño',`${Math.round(a.units).toLocaleString('es')} EUR (${(a.units/100000).toFixed(3)} lotes)${a.capped?' · limitado por apalancamiento':''}`)+
+    row('Margen requerido',`$${f2(a.margin)}`)+
+    row('Riesgo máx. / Ganancia objetivo',`<span class="dn">−$${f2(a.loss)}</span> / <span class="up">+$${f2(a.gain)}</span>`)+
+    row('Valor esperado (Monte Carlo)',`${a.ev>=0?'+':'−'}$${f2(Math.abs(a.ev))}`,a.ev>=0?'up':'dn');
+
+  const o=a.outcome;
+  let t='';
+  if(a.action==='ESPERAR'){
+    t+=row('Zona de compra',f5(a.zBuy.level));
+    t+=row('Prob. de tocarla / tiempo estimado',`${(a.zBuy.p*100).toFixed(0)}% · ${fmtTime(a.zBuy.t,min)}`);
+    t+=row('Zona de venta',f5(a.zSell.level));
+    t+=row('Prob. de tocarla / tiempo estimado',`${(a.zSell.p*100).toFixed(0)}% · ${fmtTime(a.zSell.t,min)}`);
+    t+=row('Consejo','Sin ventaja clara: esperar a una zona','warn');
+  }else{
+    t+=row(a.dir>0?'Comprar':'Vender','Ahora, a '+f5(a.entry),a.dir>0?'up':'dn');
+    t+=row(a.dir>0?'Vender (cerrar) en take-profit':'Recomprar (cerrar) en take-profit',f5(a.tp));
+  }
+  t+=row('P(llegar a take-profit)',(o.pTP*100).toFixed(0)+'%','up');
+  t+=row('Tiempo mediano a take-profit',fmtTime(o.tTP,min));
+  t+=row('P(tocar stop-loss)',(o.pSL*100).toFixed(0)+'%','dn');
+  t+=row('Tiempo mediano a stop-loss',fmtTime(o.tSL,min));
+  t+=row('Sin resolver en '+a.Hm+' barras',(o.pNone*100).toFixed(0)+'%','mut');
+  $('tblTime').innerHTML=t;
+
+  $('tblInd').innerHTML=
+    row('RSI(14)',a.rsi.toFixed(1),a.rsi>70?'dn':a.rsi<30?'up':'')+
+    row('EMA 9 / 21 / 50',`${f5(a.e9)} / ${f5(a.e21)} / ${f5(a.e50)}`)+
+    row('Histograma MACD',a.hist.toExponential(2),a.hist>=0?'up':'dn')+
+    row('Bollinger inf / sup',`${f5(a.bb.lo[a.n-1])} / ${f5(a.bb.up[a.n-1])}`)+
+    row('ATR(14)',`${(a.A*10000).toFixed(1)} pips`)+
+    row('Volatilidad EWMA / barra',(a.sigma*100).toFixed(4)+'%')+
+    row('Regresión (t-stat)',a.reg.t.toFixed(2))+
+    row('Autocorrelación AR(1) φ',a.phi.toFixed(3));
+
+  drawMain(res,tf);
+  drawDays(res,tf);
+}
+
+function drawMain(res,tf){
+  const a=res.a, vis=TF[tf].vis, bars=res.bars.slice(-vis), off=res.bars.length-bars.length;
+  const labels=bars.map(b=>lbl(b.t,tf)); const step=TF[tf].min*60000*(tf==='1d'?1:1);
+  const lastT=bars[bars.length-1].t;
+  for(let k=1;k<=a.H;k++) labels.push(lbl(lastT+k*step,tf));
+  const nV=bars.length, tot=nV+a.H;
+  const pad=(arr)=>arr.concat(new Array(a.H).fill(null));
+  const fut=(arr)=>new Array(nV-1).fill(null).concat([a.last],arr);
+  const line=(v)=>new Array(nV-1).fill(null).concat(new Array(a.H+1).fill(v));
+  const sl=(arr)=>pad(arr.slice(off));
+  const ds=[
+    {label:'EUR/USD',data:pad(bars.map(b=>b.c)),borderColor:'#58a6ff',borderWidth:1.6,pointRadius:0,tension:.1},
+    {label:'EMA 21',data:sl(a.e21arr),borderColor:'#d29922',borderWidth:1,pointRadius:0},
+    {label:'Bollinger sup',data:sl(a.bb.up),borderColor:'rgba(139,148,158,.5)',borderWidth:1,borderDash:[3,3],pointRadius:0},
+    {label:'Bollinger inf',data:sl(a.bb.lo),borderColor:'rgba(139,148,158,.5)',borderWidth:1,borderDash:[3,3],pointRadius:0},
+    {label:'Proyección (mediana)',data:fut(a.band.p50),borderColor:'#bc8cff',borderWidth:2,pointRadius:0},
+    {label:'Banda 90%',data:fut(a.band.p90),borderColor:'rgba(188,140,255,.5)',borderDash:[4,4],borderWidth:1,pointRadius:0},
+    {label:'Banda 10%',data:fut(a.band.p10),borderColor:'rgba(188,140,255,.5)',borderDash:[4,4],borderWidth:1,pointRadius:0},
+    {label:'Take-profit',data:line(a.tp),borderColor:'#3fb950',borderWidth:1,borderDash:[6,4],pointRadius:0},
+    {label:'Stop-loss',data:line(a.sl),borderColor:'#f85149',borderWidth:1,borderDash:[6,4],pointRadius:0}
+  ];
+  if(charts.main) charts.main.destroy();
+  charts.main=new Chart($('main'),{type:'line',data:{labels,datasets:ds},options:{
+    responsive:true,maintainAspectRatio:false,animation:false,spanGaps:false,
+    interaction:{mode:'index',intersect:false},
+    plugins:{legend:{labels:{color:'#8b949e',boxWidth:12}}},
+    scales:{x:{ticks:{color:'#8b949e',maxTicksLimit:8},grid:{color:'#21262d'}},
+            y:{ticks:{color:'#8b949e',callback:v=>v.toFixed(4)},grid:{color:'#21262d'}}}}});
+}
+
+function drawDays(res,tf){
+  const groups=new Map();
+  for(const b of res.bars){
+    const d=new Date(b.t); let key,title;
+    if(tf==='1d'){ const m=new Date(d); const wd=(m.getDay()+6)%7; m.setDate(m.getDate()-wd); key=m.toISOString().slice(0,10); title='Semana del '+m.toLocaleDateString('es',{day:'2-digit',month:'2-digit'}); }
+    else { key=d.toLocaleDateString('en-CA'); title=dayLabel(b.t); }
+    if(!groups.has(key)) groups.set(key,{title,bars:[]});
+    groups.get(key).bars.push(b);
+  }
+  const list=[...groups.values()].slice(-(tf==='1d'?8:7)).reverse();
+  $('daysTitle').textContent=tf==='1d'?'Gráficos por semana (últimas 8)':'Gráficos por día (últimos '+list.length+')';
+  charts.days.forEach(c=>c.destroy()); charts.days=[]; $('days').innerHTML='';
+  list.forEach((g,i)=>{
+    const o=g.bars[0].o, c=g.bars[g.bars.length-1].c, hi=Math.max(...g.bars.map(b=>b.h)), lo=Math.min(...g.bars.map(b=>b.l));
+    const cp=(c-o)/o*100, col=c>=o?'#3fb950':'#f85149';
+    const el=document.createElement('div'); el.className='day';
+    el.innerHTML=`<div class="h"><b>${g.title}</b><span class="${c>=o?'up':'dn'}">${cp>=0?'+':''}${cp.toFixed(2)}%</span></div>
+      <canvas id="d${i}"></canvas>
+      <div class="h mut" style="margin-top:4px"><span>Máx ${f5(hi)}</span><span>Mín ${f5(lo)}</span><span>${((hi-lo)*10000).toFixed(0)} pips</span></div>`;
+    $('days').appendChild(el);
+    charts.days.push(new Chart(el.querySelector('canvas'),{type:'line',
+      data:{labels:g.bars.map(b=>lbl(b.t,tf)),datasets:[{data:g.bars.map(b=>b.c),borderColor:col,borderWidth:1.4,pointRadius:0,tension:.15,
+        fill:true,backgroundColor:col+'22'}]},
+      options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{display:false}},
+        scales:{x:{display:false},y:{ticks:{color:'#8b949e',font:{size:10},callback:v=>v.toFixed(4)},grid:{color:'#21262d'}}}}}));
+  });
+}
+
+/* ============ CICLO ============ */
+let cache=null;
+async function run(refetch=true){
+  const tf=$('tf').value;
+  try{
+    $('status').textContent='Actualizando…';
+    if(refetch||!cache||cache.tf!==tf){
+      const d=await loadBars(tf); cache={tf,...d};
+    }
+    let useTf=cache.forceDaily?'1d':tf;
+    if(cache.forceDaily && tf!=='1d'){ $('tf').value='1d'; $('hz').value=TF['1d'].H; useTf='1d'; }
+    const p={capital:Math.max(10,+$('capital').value||1000),risk:clamp(+$('risk').value||1,.1,10),lev:Math.max(1,+$('lev').value||30),
+             H:clamp(Math.round(+$('hz').value||TF[useTf].H),3,120),kSL:+$('ksl').value||1.5,kTP:+$('ktp').value||2.5};
+    const a=analyze(cache.bars,p);
+    render({bars:cache.bars,a},useTf,cache);
+  }catch(e){
+    $('status').innerHTML='<span class="dn">No se pudieron cargar los datos ('+e.message+'). Reintentando…</span>';
+  }
+}
+function schedule(){
+  clearInterval(timer);
+  timer=setInterval(()=>run(true), $('tf').value==='1d'?300000:30000);
+}
+$('go').onclick=()=>run(false);
+$('tf').onchange=()=>{$('hz').value=TF[$('tf').value].H; run(true); schedule();};
+['capital','risk','lev','hz','ksl','ktp'].forEach(id=>$(id).addEventListener('change',()=>run(false)));
+run(true); schedule();
+</script>
+</body>
+</html>
